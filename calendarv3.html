@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>烦恼拆解引擎 V3 - 时间轴版</title>
+    
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <style>
+        body { background-color: #F8FAFC; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        
+        /* 隐藏滚动条但保留功能 */
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        
+        /* 自定义细滚动条 (用于月视图) */
+        .thin-scrollbar::-webkit-scrollbar { width: 4px; }
+        .thin-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .thin-scrollbar::-webkit-scrollbar-thumb { background-color: #CBD5E1; border-radius: 20px; }
+
+        .fade-in { animation: fadeIn 0.3s ease-out; }
+        .scale-in { animation: scaleIn 0.2s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes scaleIn { from { transform: scale(0.95); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+        
+        /* 时间轴网格线 */
+        .time-grid-line { border-bottom: 1px dashed #E2E8F0; height: 60px; box-sizing: border-box; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useMemo, useEffect, useRef } = React;
+
+        // --- 1. 数据结构 (新增 start_hour 用于时间轴定位) ---
+        const INITIAL_CONCERNS = [
+            {
+                id: 'c1', 
+                title: '项目上线前的焦虑', 
+                original_text: "最近总觉得项目会延期，手头事情太多了，不知道从哪里开始做，很怕老板失望。", 
+                main_emotion: '焦虑', 
+                intensity: 8, 
+                color: '#F97316', // Orange
+                encouragement: "焦虑是因为你在乎。把大山拆成碎石，你其实比想象中更有掌控力。🌱", 
+                steps: [
+                    // offset: 0 (周一), start_hour: 9 (9:00 AM)
+                    { id: 's1', content: '列出剩余风险清单', estimated_minutes: 60, offset: 0, start_hour: 9 }, 
+                    { id: 's2', content: '给老板发邮件确认优先级', estimated_minutes: 30, offset: 0, start_hour: 11 }, 
+                    { id: 's3', content: '调整下周排期表', estimated_minutes: 90, offset: 1, start_hour: 14 } 
+                ]
+            },
+            {
+                id: 'c2', 
+                title: '父母体检安排', 
+                original_text: "爸妈好久没体检了，想带他们去但是又怕查出什么问题。",
+                main_emotion: '关切', 
+                intensity: 6, 
+                color: '#0EA5E9', // Blue
+                encouragement: "你的关心是给父母最好的礼物。无论结果如何，陪伴本身就是力量。💙",
+                steps: [
+                    { id: 's4', content: '查询适合老人的体检套餐', estimated_minutes: 45, offset: 1, start_hour: 10 }, 
+                    { id: 's5', content: '预约医院', estimated_minutes: 20, offset: 4, start_hour: 16 } 
+                ]
+            }
+        ];
+
+        // --- 2. 组件区域 ---
+
+        // A. 详情弹窗 (需求 3 & 4)
+        const ConcernModal = ({ concern, onClose }) => {
+            if (!concern) return null;
+            return (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm fade-in" onClick={onClose}>
+                    <div className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden scale-in relative" onClick={e => e.stopPropagation()}>
+                        <div className="h-3 w-full" style={{ background: concern.color }}></div>
+                        <div className="p-6">
+                            <div className="flex justify-between items-start mb-6">
+                                <h2 className="text-xl font-bold text-slate-800">{concern.title}</h2>
+                                <button onClick={onClose} className="p-2 bg-slate-50 rounded-full hover:bg-slate-100 text-slate-400">✕</button>
+                            </div>
+
+                            {/* 需求 3: 直接显示鼓励内容 (引用样式) */}
+                            <div className="mb-6 relative">
+                                <div className="absolute -left-2 -top-2 text-4xl text-indigo-100 font-serif">“</div>
+                                <p className="relative z-10 text-indigo-800 text-base font-medium leading-relaxed italic px-4">
+                                    {concern.encouragement}
+                                </p>
+                                <div className="absolute right-0 -bottom-4 text-4xl text-indigo-100 font-serif rotate-180">“</div>
+                            </div>
+
+                            {/* 需求 4: 改名为“烦恼详情” */}
+                            <div className="mb-6 bg-slate-50 p-4 rounded-xl border border-slate-100">
+                                <h3 className="text-xs font-bold text-slate-400 uppercase mb-2">烦恼详情</h3>
+                                <p className="text-slate-600 text-sm leading-relaxed">
+                                    {concern.original_text}
+                                </p>
+                            </div>
+
+                            <div>
+                                <h3 className="text-xs font-bold text-slate-400 uppercase mb-3">后续拆解</h3>
+                                <div className="space-y-2 max-h-40 overflow-y-auto pr-2 thin-scrollbar">
+                                    {concern.steps.map((step, idx) => (
+                                        <div key={idx} className="flex items-center gap-3 p-2 rounded border border-slate-100 bg-white">
+                                            <div className="w-1.5 h-8 rounded-full" style={{ background: concern.color }}></div>
+                                            <div>
+                                                <div className="text-sm font-medium text-slate-700">{step.content}</div>
+                                                <div className="text-xs text-slate-400">预计 {step.estimated_minutes} 分钟</div>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // B. 周视图 (需求 1: 时间轴)
+        const WeekView = ({ days }) => {
+            // 生成 8:00 - 20:00 的时间刻度 (为了Demo展示效果，不展示24小时)
+            const hours = Array.from({ length: 13 }, (_, i) => i + 8); 
+
+            return (
+                <div className="flex h-full bg-white border border-slate-200 rounded-lg overflow-hidden">
+                    {/* 左侧时间轴栏 */}
+                    <div className="w-12 flex-shrink-0 bg-slate-50 border-r border-slate-200 pt-10">
+                        {hours.map(h => (
+                            <div key={h} className="h-[60px] text-[10px] text-slate-400 text-right pr-2 -mt-2">
+                                {h}:00
+                            </div>
+                        ))}
+                    </div>
+
+                    {/* 日程网格区域 (可滚动) */}
+                    <div className="flex-1 overflow-y-auto custom-scrollbar relative">
+                        <div className="flex min-w-[600px]"> {/* 保证宽度 */}
+                            {days.map((day, dIdx) => (
+                                <div key={day.date} className="flex-1 min-w-[100px] border-r border-slate-100 last:border-0 relative">
+                                    {/* 1. 表头 */}
+                                    <div className="sticky top-0 z-10 bg-white/95 backdrop-blur border-b border-slate-100 text-center py-2 shadow-sm">
+                                        <div className="text-xs font-bold text-slate-400">{day.dayLabel}</div>
+                                        <div className="text-lg font-bold text-slate-800">{day.date}</div>
+                                    </div>
+
+                                    {/* 2. 背景网格线 */}
+                                    <div className="pt-2"> 
+                                        {hours.map(h => (
+                                            <div key={h} className="time-grid-line"></div>
+                                        ))}
+                                    </div>
+
+                                    {/* 3. 绝对定位的任务卡片 */}
+                                    {day.steps.map((step, sIdx) => {
+                                        // 计算位置：假设 Grid 从 8:00 开始
+                                        // 8:00 = 0px, 9:00 = 60px
+                                        const startHour = step.start_hour || 9; // 默认9点
+                                        const top = (startHour - 8) * 60 + 10; // +10 for header padding
+                                        const height = (step.estimated_minutes / 60) * 60; // 1小时 = 60px高度
+                                        
+                                        // 如果任务在 8点前或20点后，简单处理隐藏或显示在顶部
+                                        if (startHour < 8 || startHour > 20) return null; 
+
+                                        return (
+                                            <div 
+                                                key={sIdx}
+                                                className="absolute left-1 right-1 rounded border-l-4 p-1 text-[10px] shadow-sm cursor-pointer hover:shadow-md hover:z-20 transition"
+                                                style={{
+                                                    top: `${top}px`,
+                                                    height: `${Math.max(30, height)}px`, // 最小高度
+                                                    backgroundColor: `${step.concernColor}15`, // 浅色背景
+                                                    borderLeftColor: step.concernColor,
+                                                    color: '#334155'
+                                                }}
+                                                title={`${step.content} (${step.estimated_minutes}min)`}
+                                            >
+                                                <div className="font-bold truncate">{step.content}</div>
+                                                <div className="opacity-70">{startHour}:00 - {startHour}:{step.estimated_minutes}</div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // C. 月视图 (需求 2: 显示名称与滚动条)
+        const MonthView = ({ days }) => {
+            return (
+                <div className="grid grid-cols-7 grid-rows-5 gap-px bg-slate-200 border border-slate-200 rounded-lg overflow-hidden h-full">
+                    {days.map((day) => (
+                        <div key={day.date} className="bg-white flex flex-col h-full min-h-[100px] overflow-hidden">
+                            {/* Header */}
+                            <div className="p-1 px-2 text-xs font-medium text-slate-500 flex justify-between">
+                                <span>{day.date}</span>
+                                {day.totalMinutes > 0 && <span className="text-[10px] text-slate-300">{day.totalMinutes}m</span>}
+                            </div>
+                            
+                            {/* Scrollable Tasks Area (需求 2) */}
+                            <div className="flex-1 overflow-y-auto thin-scrollbar p-1 space-y-1">
+                                {day.steps.map((step, idx) => (
+                                    <div 
+                                        key={idx} 
+                                        className="text-[10px] px-1.5 py-1 rounded truncate border-l-2 cursor-pointer hover:opacity-80 transition"
+                                        style={{ 
+                                            backgroundColor: `${step.concernColor}15`, 
+                                            color: '#334155',
+                                            borderLeftColor: step.concernColor
+                                        }}
+                                        title={step.content}
+                                    >
+                                        {step.content}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            );
+        };
+
+        // --- 3. 主应用 ---
+        function App() {
+            const [concerns, setConcerns] = useState(INITIAL_CONCERNS);
+            const [viewMode, setViewMode] = useState('week'); 
+            const [selectedConcern, setSelectedConcern] = useState(null); 
+            const [inputText, setInputText] = useState("");
+
+            // 数据处理逻辑 (Mock)
+            const calendarData = useMemo(() => {
+                const isWeek = viewMode === 'week';
+                const daysCount = isWeek ? 7 : 35; // 月视图显示35格
+                const startOffset = isWeek ? 12 : 1; 
+
+                return Array.from({ length: daysCount }, (_, i) => {
+                    const dateNum = startOffset + i;
+                    const daySteps = [];
+                    
+                    concerns.forEach(c => {
+                        c.steps.forEach(s => {
+                            // 简单的日期映射逻辑
+                            if ((12 + s.offset) === dateNum) {
+                                daySteps.push({ ...s, concernColor: c.color, concernId: c.id });
+                            }
+                        });
+                    });
+
+                    return {
+                        date: dateNum > 31 ? dateNum - 31 : dateNum, // 简单处理跨月
+                        dayLabel: ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'][i % 7],
+                        steps: daySteps,
+                        totalMinutes: daySteps.reduce((acc, s) => acc + s.estimated_minutes, 0)
+                    };
+                });
+            }, [concerns, viewMode]);
+
+            return (
+                <div className="flex flex-col h-screen overflow-hidden relative text-slate-700">
+                    
+                    {/* Header */}
+                    <header className="bg-white px-4 py-3 shadow-sm z-20 shrink-0">
+                        <div className="max-w-md mx-auto w-full relative mb-3">
+                            <input 
+                                type="text" 
+                                value={inputText}
+                                onChange={e => setInputText(e.target.value)}
+                                placeholder="输入烦恼，AI 帮你拆解..." 
+                                className="w-full bg-slate-100 pl-5 pr-12 py-3 rounded-2xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 transition"
+                            />
+                            <div className="absolute right-3 top-3 text-slate-400">🎤</div>
+                        </div>
+                        <div className="flex justify-between items-center text-xs font-semibold text-slate-500">
+                            <div className="flex gap-1 bg-slate-100 p-1 rounded-lg">
+                                <button onClick={() => setViewMode('week')} className={`px-3 py-1 rounded-md transition ${viewMode === 'week' ? 'bg-white shadow text-indigo-600' : 'hover:text-slate-700'}`}>周视图</button>
+                                <button onClick={() => setViewMode('month')} className={`px-3 py-1 rounded-md transition ${viewMode === 'month' ? 'bg-white shadow text-indigo-600' : 'hover:text-slate-700'}`}>月视图</button>
+                            </div>
+                            <span>Dec 2025</span>
+                        </div>
+                    </header>
+
+                    {/* Main Area */}
+                    <main className="flex-1 overflow-hidden p-2 pb-48 bg-slate-50">
+                        {viewMode === 'week' ? (
+                            <WeekView days={calendarData} />
+                        ) : (
+                            <MonthView days={calendarData} />
+                        )}
+                    </main>
+
+                    {/* Bottom Panel */}
+                    <div className="absolute bottom-0 left-0 right-0 bg-white rounded-t-3xl shadow-[0_-8px_30px_rgba(0,0,0,0.1)] z-30">
+                        <div className="w-full flex justify-center pt-3 pb-1">
+                            <div className="w-12 h-1.5 bg-slate-200 rounded-full"></div>
+                        </div>
+                        <div className="px-5 pb-8 pt-2">
+                            <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">我的烦恼 (点击展开)</h3>
+                            <div className="flex gap-4 overflow-x-auto no-scrollbar pb-2">
+                                {concerns.map(c => (
+                                    <div 
+                                        key={c.id} 
+                                        onClick={() => setSelectedConcern(c)}
+                                        className="min-w-[200px] p-4 rounded-2xl border cursor-pointer hover:brightness-95 hover:scale-[1.02] transition duration-200 bg-slate-50 border-slate-200"
+                                    >
+                                        <div className="flex justify-between items-start mb-2">
+                                            <h4 className="font-bold text-slate-800 text-sm truncate max-w-[80%]">{c.title}</h4>
+                                            <div className="w-2 h-2 rounded-full shadow-sm" style={{ background: c.color }}></div>
+                                        </div>
+                                        <div className="flex items-center gap-2 mb-3">
+                                            <span className="px-2 py-0.5 bg-white border border-slate-100 rounded-md text-[10px] font-medium text-slate-500">
+                                                {c.main_emotion}
+                                            </span>
+                                            <div className="h-1 flex-1 bg-slate-200 rounded-full overflow-hidden">
+                                                <div className="h-full" style={{ width: c.intensity * 10 + '%', background: c.color }}></div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Modal */}
+                    {selectedConcern && (
+                        <ConcernModal concern={selectedConcern} onClose={() => setSelectedConcern(null)} />
+                    )}
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
